@@ -7,5 +7,5 @@ Necessary for the correct operation of the program:
 
 Instruction:
 You must enter the login and password for the your MySQL server in export variables:
-MSSQL_US - user name
-MSSQL_PASS - password
+\nMSSQL_US - user name
+\nMSSQL_PASS - password

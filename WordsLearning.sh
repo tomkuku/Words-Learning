@@ -1,10 +1,6 @@
 #!/usr/local/bin/bash
 
-MSSQL_PASS="Password123!"
-MSSQL_US="sa"
-readonly db_name="WordsLearning"
-# selected_group=""
-# declare -a all_words
+readonly db_name="WordsLearningDB"
 
 function exec_mssql_query() {
   # $1 - is query
@@ -21,14 +17,14 @@ function exec_mssql_query() {
 }
 
 function exec_mssql_query_without_output() {
-  mssql -u $MSSQL_US -p $MSSQL_PASS -q "$1"
+  helper=`mssql -u $MSSQL_US -p $MSSQL_PASS -q "$1"`
 }
 
 function create_new_group() {
   local new_group_name
   echo "Enter new group name:"
   read new_group_name
-  local helper=`exec_mssql_query_without_output "USE $db_name; CREATE TABLE $new_group_name (id SMALLINT PRIMARY KEY, word VARCHAR(50), trans VARCHAR(50), num_of_all_ans TINYINT, num_of_cor_ans TINYINT);"`
+  exec_mssql_query_without_output "USE $db_name; CREATE TABLE $new_group_name (id SMALLINT PRIMARY KEY, word VARCHAR(50), trans VARCHAR(50), num_of_all_ans TINYINT, num_of_cor_ans TINYINT);"
   echo "Created!"
   sleep 0.4
 }
@@ -91,19 +87,15 @@ function show_group() {
     echo "$word - $trans"
   done
 
-    echo -e "l) start learning"
-    echo "a) add new word"
-    echo "r) remove group"
-    echo "b) back to menu"
+    echo -e "1) start learning\n2) add new word\n3) remove group\n4) back to menu"
     read option
 
     case "$option" in
-      'a')
-          add_new_word_to_group "$1"
-        ;;
-      'l')
-        learn "$1";;
-      'r')
+      '1')
+        learn "$1" ;;
+      '2')
+        add_new_word_to_group "$1" ;;
+      '3')
         clear
         read -p "Are you sure? n - no  y - yes" opt
 
@@ -112,7 +104,7 @@ function show_group() {
           return
         fi
         ;;
-      'b')
+      '4')
         return
         ;;
     esac
@@ -146,8 +138,7 @@ function add_new_word_to_group() {
     echo "INSERT INTO ${1} VALUES (${genered_id}, '${word}', '${trans}', 0, 0);" >> temp_file_sql_queries
   done
 
-  cat temp_file_sql_queries
-  local helper=`exec_mssql_query_without_output "$(cat temp_file_sql_queries)"`
+  exec_mssql_query_without_output "$(cat temp_file_sql_queries)"
   rm temp_file_sql_queries
 }
 
@@ -170,7 +161,14 @@ function genere_UUID() {
 }
 
 function get_all_words() {
-  readarray -t lines< <(exec_mssql_query "USE $db_name; SELECT * FROM $1 ORDER BY num_of_cor_ans DESC;")
+  local num_of_all_words=`exec_mssql_query "USE $db_name; SELECT COUNT(*) FROM $1;"`
+
+  readarray -t lines< <(exec_mssql_query "USE $db_name; SELECT * FROM $1 WHERE num_of_cor_ans < 3 ORDER BY num_of_cor_ans DESC;")
+
+  if [ ${#lines[@]} -lt 5 ] && [ $num_of_all_words -ge 5 ]; then
+    readarray -t helper< <(exec_mssql_query "USE $db_name; SELECT TOP $((num_of_all_words-${#lines[@]})) * FROM $1 ORDER BY num_of_cor_ans DESC")
+    for ((i=0;i<${#helper[@]};i++)); do lines+=("${helper[$i]}"); done
+  fi
 
   declare -a words_packs
 
@@ -183,7 +181,6 @@ function get_all_words() {
     trans=`echo "$line" | awk '{print $3}'`
     num_of_all_ans=`echo "$line" | awk '{print $4}'`
     num_of_cor_ans=`echo "$line" | awk '{print $5}'`
-    # let factor=num_of_all_ans-num_of_cor_ans
     echo "${id}:${word}:${trans}:${num_of_all_ans}:${num_of_cor_ans}"
   done
 }
@@ -195,14 +192,14 @@ function learn() {
   local remainder_of_five
   local rep_num
 
-  echo "all_words_count $all_words_count"
-
   if [ $all_words_count -eq 0 ] ; then
     echo "You havn't added any words to this group!"
+    sleep 2
     return
-  elif (( all_words_count <= 7 )) ; then
-    rep_num=1
-    let remainder_of_five=all_words_count%5
+  elif (( all_words_count < 5 )) ; then
+    echo "Min words quantity is 5"
+    sleep 2
+    return
   else
     let remainder_of_five=all_words_count%5
     let rep_num=(all_words_count-remainder_of_five)/5
@@ -220,13 +217,9 @@ function learn() {
 
     if (( i == (rep_num-1) )) ; then # last queue
       if [ $remainder_of_five -gt 2 ] ; then
-        if (( all_words_count > 5 )) ; then
-          let top_range=bottom_range+remainder_of_five+3;
-        else
-          let top_range=bottom_range+remainder_of_five-1;
-        fi
+        top_range=bottom_range+remainder_of_five-1
       else
-        let top_range=bottom_range+remainder_of_five;
+        let top_range=bottom_range+remainder_of_five+4
       fi
     else
       let top_range=bottom_range+4
@@ -237,23 +230,22 @@ function learn() {
       words_to_asking_queue+=("${all_words[$j]}")
     done
 
+    echo "rep_num $rep_num words_to_asking_queue: ${#words_to_asking_queue[@]} bottom $bottom_range top $top_range"
+
     # Showing
     clear
-    echo "USE ${db_name}" > working_file
-    echo "Try to remember:"
     for ((j=0;j<${#words_to_asking_queue[@]};j++)); do
+      if [ $j -eq 0 ] ; then echo "Try to remember:"; fi
       local current_word=${words_to_asking_queue[$j]}
+      # echo "$(echo "$current_word" | awk -F: '{print $4}')"
+
       if [ $(echo "$current_word" | awk -F: '{print $4}') -gt 0 ] ; then continue; fi
       local id=`echo "$current_word" | awk -F: '{print $1}'`
       local word=`echo "$current_word" | awk -F: '{print $2}' | tr '+' ' '`
       local trans=`echo "$current_word" | awk -F: '{print $3}' | tr '+' ' '`
       echo "$word - $trans"
       read -p "Any key to next" next
-      echo "UPDATE ${1} SET is_showed=1 WHERE id=${id};" >> working_file
     done
-
-    helper=`exec_mssql_query_without_output "$(cat working_file)"`
-    rm working_file
 
     # Asking
     declare -i learned_words_num=0
@@ -317,7 +309,7 @@ function learn() {
           ;;
       esac
 
-      current_word=("${id}:${word}:${trans}:${num_of_all_ans}:${num_of_cor_ans}:1")
+      current_word=("${id}:${word}:${trans}:${num_of_all_ans}:${num_of_cor_ans}")
 
       # Check if current word is learned if not, word is adding to end of words_to_asking_queue to asking again.
       if (( num_of_cor_ans < 3 )) ; then
@@ -328,16 +320,11 @@ function learn() {
 
       # Change current word in all_words to resave in whole array
       for ((k=bottom_range;k<=top_range;k++)) ; do
-        echo "k: $k - $(echo "${all_words[$k]}" | awk -F: '{print $1}')"
         if [ $(echo "${all_words[$k]}" | awk -F: '{print $1}') = "$id" ] ; then
-          echo "found!"
           all_words[$k]="$current_word"
           break
         fi
       done
-
-      echo "${all_words[@]}"
-
     done
   done
 
@@ -356,38 +343,13 @@ function learn() {
 
   exec_mssql_query_without_output "$(cat temp_file_sql_queries)"
   rm temp_file_sql_queries
-
-  clear
-  echo -e "You can all words!\nCongratulations!"
-  sleep 4
 }
 
-show_menu
+if [[ -z $MSSQL_PASS ]] || [[ -z $MSSQL_US ]]  ; then
+  echo "You havn't provide your login or password to MySQL server!"
+  exit 0
+fi
 
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
+exec_mssql_query_without_output "IF DB_ID('${db_name}') IS NULL BEGIN CREATE DATABASE ${db_name}; END"
+
+show_menu
